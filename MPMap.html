@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8" />
+    <title>My Climbs</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+        crossorigin=""/>
+     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+        crossorigin=""></script>
+        <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script> 
+
+
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>#map { height: 800px; width: 800px }</style>
+</head>
+<body>
+    <h3>Enter your mountain Project url</h5>
+    <input type="text" id="mpUser">
+    <button onclick="getProfile()">Submit</button>
+    <br><br>
+    <div id="map"></div>
+
+    <script>
+        let routeUrls = [];
+        let areaUrls = [];
+        let currentLat;
+        let currentLong;
+        let routeNameArr = [];
+        let gpsCoords = [];
+        let mark;
+        let markArray = [];
+
+        // Climb grades (5.9, WI4, etc.)
+        let rockGrade;
+        let iceGrade;
+        let mixedGrade;
+        let aidGrade;
+        let aidRating = [];
+
+        for(let k = 0; k < 6; k++){
+            aidRating.push("A" + k, "C" + k);
+        }
+
+        // Layers for markers and tooltips of climbs 
+        let rockLayer = L.layerGroup();
+        let iceLayer = L.layerGroup();
+        let mixedLayer = L.layerGroup();
+        let aidLayer = L.layerGroup();
+
+        // Arrays to hold grades of climbs
+        let rockDifficulty = [];
+        let iceDifficulty = [];
+        let mixedDifficulty = [];
+        let aidDifficulty = [];
+
+        // Temporary string to operate on if statement
+        let iceTemp;
+
+        // Set initial map view position
+        let map = L.map('map').setView([49.545206,-122.629395], 9);
+
+        // Terrain map layer
+        let OpenTopoMap = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
+            maxZoom: 17,
+            attribution: 'Map data: &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, <a href="http://viewfinderpanoramas.org">SRTM</a> | Map style: &copy; <a href="https://opentopomap.org">OpenTopoMap</a> (<a href="https://creativecommons.org/licenses/by-sa/3.0/">CC-BY-SA</a>)'
+        });
+        OpenTopoMap.addTo(map);
+
+        //CORS header for querying, get access by following https://cors-anywhere.herokuapp.com/corsdemo
+        jQuery.ajaxPrefilter(function(options) {
+            if (options.crossDomain && jQuery.support.cors) {
+                options.url = 'https://cors-anywhere.herokuapp.com/' + options.url;
+            }
+        });
+        function getProfile() {
+            //Take the url user inputs to scrape
+            let userTodo = document.getElementById("mpUser").value;
+            $(document).ready(function() { 
+                $.get(userTodo, (html) => { 
+                    for(let i = 0; i < $(html).find("tr.route-row").length / 2; i++){
+
+                            // Find climbs on to do list
+                            currentBlock = $(html).find("tr.route-row:eq(" + i + ")").html();
+
+                            // String operations to find grades of climbs
+                            rockGrade = currentBlock.slice(currentBlock.indexOf("rateYDS") + 9);
+                            iceTemp = rockGrade;
+                            rockGrade = rockGrade.substring(0, rockGrade.indexOf("<")).trim();
+                            mixedGrade = currentBlock.slice(currentBlock.indexOf("British"));
+                            mixedGrade = mixedGrade.substring(mixedGrade.indexOf("</span>") + 7, mixedGrade.indexOf("<div>")).trim();
+                            
+                            // Last two characters in mixed grade will be A/C ratings, treat it as an aid climb if it is in aidRating (A/C 0-5)
+                            if(aidRating.includes(mixedGrade.slice(-2))){
+                                aidGrade = rockGrade + " " + mixedGrade;
+                                aidDifficulty.push(aidGrade);
+                                mixedDifficulty.push(null)
+                                rockDifficulty.push(null);
+                                iceDifficulty.push(null);
+                            } 
+                            // If rock grade and ice grade are present, add grade to mixedDifficulty and null to others (unless the value for mixed is PG13/R/X)
+                            else if((rockGrade.length && mixedGrade.length) && mixedGrade != ("PG13" || "R" || "X")){
+                                mixedGrade = rockGrade + " " + mixedGrade;
+                                mixedDifficulty.push(mixedGrade);
+                                rockDifficulty.push(null);
+                                iceDifficulty.push(null);
+                                aidDifficulty.push(null);
+                            }
+                            //If rock grade not present, assume it is an ice climb
+                            else if(!rockGrade.length){
+                                iceGrade = iceTemp.substring(iceTemp.indexOf("<div class=\"float-xs-right text-xs-right\">") + 42, iceTemp.indexOf("<div>")).trim();
+                                iceDifficulty.push(iceGrade);
+                                mixedDifficulty.push(null)
+                                rockDifficulty.push(null);
+                                aidDifficulty.push(null);
+                            } 
+                            //Finally if there is a rock grade and no mixed grade, assume it is a rock climb, add mixedGrade which will be PG13 or R
+                            else {
+                                iceDifficulty.push(null);
+                                mixedDifficulty.push(null);
+                                aidDifficulty.push(null);
+                                rockDifficulty.push(rockGrade + " " + mixedGrade);
+                            }
+
+                            // Find URLs of climb, area, country/continent
+                            currentUrls = currentBlock.match(/(https?:\/\/(?:www\.|(?!www))[^\s\.]+\.[^\s]{2,}|www\.[^\s]+\.[^\s]{2,})/gi);
+
+                            // Add the URL of the climb itself into an array for tooltips
+                            routeUrls.push(currentUrls[0].slice(0, currentUrls[0].lastIndexOf("\"")));
+                            
+                            // Find URL of area, if statement because area is always second last in the array, but arrays have 3 or 4 positions
+                            if(currentUrls[3] != null){
+                                areaUrls.push(currentUrls[3].slice(0, currentUrls[3].lastIndexOf("\"")));
+                            } else {
+                                areaUrls.push(currentUrls[2].slice(0, currentUrls[2].lastIndexOf("\"")));
+                        }
+                    }
+
+                    // Get information on route
+                    let tempRouteStr = $(html).find("tr.route-row").text();
+
+                    // Find name of route, always after bullet point ("\u{25CF}")
+                    for(let h = 0; h < routeUrls.length; h++){
+                        tempRouteStr = tempRouteStr.substring(tempRouteStr.indexOf("\u{25CF}") + 1).trimStart();
+                        routeNameArr.push(tempRouteStr.substring(0, tempRouteStr.search(/\n/)));                   
+                    }                    
+
+                    // Adds layer controls (checkboxes)
+                    let layerControl = L.control.layers().addTo(map);
+                    
+                    // Checkboxes for overlay maps; selecting which climbs to be shown
+                    layerControl.addOverlay(rockLayer, "Rock");
+                    layerControl.addOverlay(iceLayer, "Ice");
+                    layerControl.addOverlay(mixedLayer, "Mixed");
+                    layerControl.addOverlay(aidLayer, "Aid");
+
+                    // Add layers to map
+                    map.addLayer(rockLayer);
+                    map.addLayer(iceLayer);
+                    map.addLayer(mixedLayer);
+                    map.addLayer(aidLayer);
+
+                    // Looping through areas and adding markers/tooltips to map
+                    for(let u = 0; u < areaUrls.length; u++){
+                        $.get(areaUrls[u], (html) => { 
+                                // String operations to pull GPS coordinates
+                                let currentCoords = $(html).find("table.description-details").html();
+                                currentCoords = currentCoords.slice(currentCoords.indexOf("GPS"));
+                                currentCoords = currentCoords.slice(currentCoords.search(/\d/) - 1).trimStart();
+                                currentLat = currentCoords.substring(0, currentCoords.indexOf(","));
+                                currentLong = currentCoords.substring(currentCoords.indexOf(",") + 2, currentCoords.indexOf("<") - 1);
+                                // Adding GPS coordinates to an array; used to find weather for the climb
+                                gpsCoords.push(L.latLng(currentLat, currentLong));
+                                mark = L.marker([currentLat, currentLong]);
+                                // Depending on type of climbs, add marker and tooltips to either rock, mixed, ice or aid layer
+                                if(rockDifficulty[u] != null){
+                                    mark.addTo(rockLayer);
+                                    L.tooltip([currentLat, currentLong], {interactive: true, content: '<a href="' + routeUrls[u] + '">' + routeNameArr[u] + '</a><br>' + rockDifficulty[u] + '<br><a href=' + "https://spotwx.com/products/grib_index.php?model=rdps_10km&lat=" + gpsCoords[u] + "&lon=" + gpsCoords[u+1] + "&tz=America/Los_Angeles&label=>" + "Weather" + '</a>', permanent: true, className: "toolTips"}).addTo(rockLayer);
+                                } else if(mixedDifficulty[u] != null){
+                                    mark.addTo(mixedLayer);
+                                    L.tooltip([currentLat, currentLong], {interactive: true, content: '<a href="' + routeUrls[u] + '">' + routeNameArr[u] + '</a><br>' + mixedDifficulty[u] + '<br><a href=' + "https://spotwx.com/products/grib_index.php?model=rdps_10km&lat=" + gpsCoords[u] + "&lon=" + gpsCoords[u+1] + "&tz=America/Los_Angeles&label=>" + "Weather" + '</a>', permanent: true, className: "toolTips"}).addTo(mixedLayer);
+                                } else if (iceDifficulty[u] != null){
+                                    mark.addTo(iceLayer);
+                                    L.tooltip([currentLat, currentLong], {interactive: true, content: '<a href="' + routeUrls[u] + '">' + routeNameArr[u] + '</a><br>' + iceDifficulty[u] + '<br><a href=' + "https://spotwx.com/products/grib_index.php?model=rdps_10km&lat=" + gpsCoords[u] + "&lon=" + gpsCoords[u+1] + "&tz=America/Los_Angeles&label=>" + "Weather" + '</a>', permanent: true, className: "toolTips"}).addTo(iceLayer);
+                                } else if(aidDifficulty[u] != null){
+                                    mark.addTo(aidLayer);
+                                    L.tooltip([currentLat, currentLong], {interactive: true, content: '<a href="' + routeUrls[u] + '">' + routeNameArr[u] + '</a><br>' + aidDifficulty[u] + '<br><a href=' + "https://spotwx.com/products/grib_index.php?model=rdps_10km&lat=" + gpsCoords[u] + "&lon=" + gpsCoords[u+1] + "&tz=America/Los_Angeles&label=>" + "Weather" + '</a>', permanent: true, className: "toolTips"}).addTo(aidLayer);
+                                }
+                                // Remove overlapping tooltips as tooltips are added to the map
+                                removeOverlappingTooltips();
+                        })
+                    }
+                    // Checking outer bounds of tooltips to see if theres overlap
+                    function checkForOverlap(tool1, tool2) {
+                        return(!(tool1.right < tool2.left || 
+                        tool1.left > tool2.right || 
+                        tool1.bottom < tool2.top || 
+                        tool1.top > tool2.bottom));
+                    }
+                    // Removing tooltips that are overlapping
+                    function removeOverlappingTooltips() {
+                        let rects = [];
+                        // Find all tooltips
+                        let tooltips = document.getElementsByClassName("toolTips");
+                        for (let i = 0; i < tooltips.length; i++) {
+                            tooltips[i].style.visibility = "";
+                            rects[i] = tooltips[i].getBoundingClientRect();
+                        }
+                        // Calling checkForOverlap to see if there is collision
+                        for (let i = 0; i < tooltips.length; i++) {
+                            if (tooltips[i].style.visibility != "hidden") {
+                                for (let j = i + 1; j < tooltips.length; j++) {
+                                    if (checkForOverlap(rects[i], rects[j]))
+                                    // If tooltips are overlapping, hiding one of them
+                                    if(gpsCoords[i] < gpsCoords[j]){
+                                        tooltips[i].style.visibility = "hidden";
+                                    } else {
+                                        tooltips[j].style.visibility = "hidden";
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // Removing overlapping tooltips/showing other tooltips if the user zooms in/out
+                    map.on("zoomend", function (evt) {
+                        removeOverlappingTooltips();
+                    }); 
+                })
+            })
+        }
+    // Group climbs in the same area together when tooltips too close
+    // Add avi forecasts to mixed/ice climbs
+    // Just show route name then on click show weather / avi
+    // For rock layer, add difficulty selector
+    // When new layer is selected, run removeOverlappingTooltips
+    </script>
+</body>
+</html>
+
+
